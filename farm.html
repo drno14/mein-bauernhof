@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mein Bauernhof</title>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,sans-serif;background:#2d3b2a;color:#fff;display:flex;flex-direction:column;align-items:center;min-height:100vh}
+  header{width:100%;max-width:1100px;display:flex;justify-content:space-between;align-items:center;padding:10px 16px;font-size:1.3rem;font-weight:700}
+  #money{background:#f5c542;color:#4a3500;padding:6px 14px;border-radius:20px}
+  main{display:flex;gap:12px;padding:0 12px 12px;max-width:1100px;width:100%;flex-wrap:wrap;justify-content:center}
+  canvas{background:#7bc67b;border-radius:12px;max-width:100%;height:auto;cursor:pointer;flex:1 1 640px;min-width:0;touch-action:manipulation}
+  #panel{width:220px;display:flex;flex-direction:column;gap:6px}
+  #panel h3{margin:8px 0 2px;font-size:.85rem;text-transform:uppercase;letter-spacing:.06em;opacity:.7}
+  button{font:inherit;font-size:1rem;padding:9px 10px;border:2px solid transparent;border-radius:10px;background:#4b6b47;color:#fff;cursor:pointer;text-align:left}
+  button:hover{background:#5a8055}
+  button.sel{border-color:#f5c542;background:#6b8f3f}
+  #msg{min-height:1.4em;font-size:.95rem;color:#ffe9a0;padding:0 16px}
+  #reset{background:#7a3b3b;margin-top:8px;font-size:.8rem}
+</style>
+</head>
+<body>
+<header><span>🌾 Mein Bauernhof</span><span id="money"></span></header>
+<div id="msg"></div>
+<main>
+  <canvas id="c" width="880" height="572"></canvas>
+  <div id="panel"></div>
+</main>
+<script>
+const T = 44, W = 20, H = 13;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const SAVE = 'farm-save-v1';
+
+const ANIMALS = {
+  huhn:  {name:'Huhn',  emoji:'🐔', price:30,  prod:'🥚', every:8,  value:5},
+  schaf: {name:'Schaf', emoji:'🐑', price:80,  prod:'🧶', every:14, value:14},
+  kuh:   {name:'Kuh',   emoji:'🐄', price:150, prod:'🥛', every:12, value:22},
+};
+const CROPS = {
+  weizen:  {name:'Weizen',  emoji:'🌾', seed:5,  time:10, value:13},
+  karotte: {name:'Karotte', emoji:'🥕', seed:8,  time:16, value:24},
+  kuerbis: {name:'Kürbis',  emoji:'🎃', seed:15, time:28, value:50},
+};
+const STALL_COST = 200, FIELD_COST = 10, STALL_W = 4, STALL_H = 3, CAP = 4;
+
+let S; // state
+function fresh(){
+  return {money:100, stalls:[{x:2,y:2,animals:[{t:'huhn',timer:0,px:.5,py:.5}],stock:0,stockVal:0}],
+          fields:{}, mode:'hand', animal:'huhn', crop:'weizen'};
+}
+try { S = JSON.parse(localStorage.getItem(SAVE)) || fresh(); } catch(e){ S = fresh(); }
+S.fields = S.fields || {};
+
+const save = () => { try{localStorage.setItem(SAVE, JSON.stringify(S));}catch(e){} };
+let msgT; function msg(t){ const m=document.getElementById('msg'); m.textContent=t; clearTimeout(msgT); msgT=setTimeout(()=>m.textContent='',3000); }
+
+function occupied(x,y){
+  if(S.fields[x+','+y]) return true;
+  return S.stalls.some(s=>x>=s.x&&x<s.x+STALL_W&&y>=s.y&&y<s.y+STALL_H);
+}
+function stallAt(x,y){ return S.stalls.find(s=>x>=s.x&&x<s.x+STALL_W&&y>=s.y&&y<s.y+STALL_H); }
+function canPlaceStall(x,y){
+  if(x<0||y<0||x+STALL_W>W||y+STALL_H>H) return false;
+  for(let i=0;i<STALL_W;i++)for(let j=0;j<STALL_H;j++) if(occupied(x+i,y+j)) return false;
+  return true;
+}
+
+// ---- Panel ----
+const panel = document.getElementById('panel');
+function buildPanel(){
+  const modes = [
+    ['hand','✋ Hand (ernten/sammeln)'],
+    ['stall','🏠 Stall bauen ($'+STALL_COST+')'],
+    ['field','🟫 Feld anlegen ($'+FIELD_COST+')'],
+    ['animal','🐾 Tier kaufen'],
+    ['erase','🪓 Feld entfernen'],
+  ];
+  let h = '<h3>Werkzeug</h3>';
+  for(const [k,l] of modes) h += `<button data-mode="${k}" class="${S.mode===k?'sel':''}">${l}</button>`;
+  h += '<h3>Tiere</h3>';
+  for(const k in ANIMALS){ const a=ANIMALS[k]; h += `<button data-animal="${k}" class="${S.mode==='animal'&&S.animal===k?'sel':''}">${a.emoji} ${a.name} – $${a.price}</button>`; }
+  h += '<h3>Saat</h3>';
+  for(const k in CROPS){ const c=CROPS[k]; h += `<button data-crop="${k}" class="${S.crop===k?'sel':''}">${c.emoji} ${c.name} – Saat $${c.seed}</button>`; }
+  h += '<button id="reset">Neu anfangen</button>';
+  panel.innerHTML = h;
+  panel.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{S.mode=b.dataset.mode;buildPanel();});
+  panel.querySelectorAll('[data-animal]').forEach(b=>b.onclick=()=>{S.mode='animal';S.animal=b.dataset.animal;buildPanel();});
+  panel.querySelectorAll('[data-crop]').forEach(b=>b.onclick=()=>{S.crop=b.dataset.crop;if(S.mode==='stall'||S.mode==='animal')S.mode='hand';buildPanel();});
+  document.getElementById('reset').onclick=()=>{ if(confirm('Wirklich neu anfangen?')){S=fresh();save();buildPanel();} };
+}
+
+// ---- Input ----
+let hover = {x:-1,y:-1};
+function tileFromEvent(e){
+  const r = cv.getBoundingClientRect();
+  const x = (e.clientX-r.left)*cv.width/r.width, y=(e.clientY-r.top)*cv.height/r.height;
+  return {x:Math.floor(x/T), y:Math.floor(y/T)};
+}
+cv.addEventListener('mousemove',e=>{hover=tileFromEvent(e);});
+cv.addEventListener('mouseleave',()=>hover={x:-1,y:-1});
+cv.addEventListener('click',e=>{
+  const {x,y}=tileFromEvent(e); hover={x,y};
+  if(x<0||y<0||x>=W||y>=H) return;
+  const key=x+','+y, st=stallAt(x,y);
+
+  if(S.mode==='stall'){
+    // Stall so platzieren, dass der Klick ungefähr in der Mitte liegt
+    const px=x-1, py=y-1;
+    if(!canPlaceStall(px,py)) return msg('Hier ist kein Platz für einen Stall.');
+    if(S.money<STALL_COST) return msg('Zu wenig Geld!');
+    S.money-=STALL_COST; S.stalls.push({x:px,y:py,animals:[],stock:0,stockVal:0});
+    msg('Neuer Stall gebaut! Kaufe jetzt Tiere dafür.');
+  }
+  else if(S.mode==='field'){
+    if(occupied(x,y)) return msg('Hier ist schon etwas.');
+    if(S.money<FIELD_COST) return msg('Zu wenig Geld!');
+    S.money-=FIELD_COST; S.fields[key]={crop:null,t:0};
+  }
+  else if(S.mode==='erase'){
+    if(S.fields[key]){ delete S.fields[key]; msg('Feld entfernt.'); }
+  }
+  else if(S.mode==='animal'){
+    if(!st) return msg('Klicke auf einen Stall, um dort ein Tier einzusetzen.');
+    const a=ANIMALS[S.animal];
+    if(st.animals.length>=CAP) return msg('Dieser Stall ist voll ('+CAP+' Tiere). Baue einen neuen!');
+    if(S.money<a.price) return msg('Zu wenig Geld!');
+    S.money-=a.price; st.animals.push({t:S.animal,timer:0,px:Math.random(),py:Math.random()});
+    msg(a.name+' gekauft!');
+  }
+  else { // hand
+    if(st){
+      if(st.stock>0){ S.money+=st.stockVal; msg('Verkauft für $'+st.stockVal+'!'); st.stock=0; st.stockVal=0; }
+      else msg('Noch nichts zum Einsammeln.');
+    } else if(S.fields[key]){
+      const f=S.fields[key];
+      if(!f.crop){
+        const c=CROPS[S.crop];
+        if(S.money<c.seed) return msg('Zu wenig Geld für Saat!');
+        S.money-=c.seed; f.crop=S.crop; f.t=0;
+      } else if(f.t>=CROPS[f.crop].time){
+        const c=CROPS[f.crop]; S.money+=c.value; msg(c.name+' geerntet: +$'+c.value);
+        f.crop=null; f.t=0;
+      }
+    }
+  }
+  save();
+});
+
+// ---- Update ----
+let last=performance.now(), saveT=0;
+function update(dt){
+  for(const s of S.stalls){
+    for(const a of s.animals){
+      const d=ANIMALS[a.t];
+      a.timer+=dt;
+      if(a.timer>=d.every){ a.timer=0; if(s.stock<12){ s.stock++; s.stockVal+=d.value; } }
+      // wandern
+      a.tx = a.tx ?? Math.random(); a.ty = a.ty ?? Math.random();
+      const dx=a.tx-a.px, dy=a.ty-a.py, dist=Math.hypot(dx,dy);
+      if(dist<.03){ a.tx=Math.random(); a.ty=Math.random(); }
+      else { a.px+=dx/dist*dt*.12; a.py+=dy/dist*dt*.12; }
+    }
+  }
+  for(const k in S.fields){ const f=S.fields[k]; if(f.crop) f.t=Math.min(f.t+dt,CROPS[f.crop].time); }
+  saveT+=dt; if(saveT>5){saveT=0;save();}
+}
+
+// ---- Draw ----
+function draw(){
+  // Gras
+  for(let x=0;x<W;x++)for(let y=0;y<H;y++){
+    ctx.fillStyle=(x+y)%2?'#7bc67b':'#74be74'; ctx.fillRect(x*T,y*T,T,T);
+  }
+  // Felder
+  for(const k in S.fields){
+    const [x,y]=k.split(',').map(Number), f=S.fields[k];
+    ctx.fillStyle='#8a5a33'; ctx.fillRect(x*T+1,y*T+1,T-2,T-2);
+    ctx.fillStyle='#734a28';
+    for(let i=0;i<3;i++) ctx.fillRect(x*T+4,y*T+9+i*12,T-8,4);
+    if(f.crop){
+      const c=CROPS[f.crop], p=f.t/c.time;
+      ctx.textAlign='center'; ctx.textBaseline='middle';
+      if(p>=1){ ctx.font='28px serif'; ctx.fillText(c.emoji,x*T+T/2,y*T+T/2+1);
+        ctx.font='14px serif'; ctx.fillText('✨',x*T+T-9,y*T+10); }
+      else if(p<.5){ ctx.font='14px serif'; ctx.fillText('🌱',x*T+T/2,y*T+T/2); }
+      else { ctx.font='22px serif'; ctx.fillText('🌿',x*T+T/2,y*T+T/2); }
+      if(p<1){ ctx.fillStyle='rgba(0,0,0,.35)'; ctx.fillRect(x*T+6,y*T+T-8,T-12,4);
+        ctx.fillStyle='#8fe36b'; ctx.fillRect(x*T+6,y*T+T-8,(T-12)*p,4); }
+    }
+  }
+  // Ställe
+  for(const s of S.stalls){
+    const x=s.x*T, y=s.y*T, w=STALL_W*T, h=STALL_H*T;
+    // Gehege
+    ctx.fillStyle='#b9d98a'; ctx.fillRect(x,y+T,w,h-T);
+    // Gebäude
+    ctx.fillStyle='#b5412f'; ctx.fillRect(x,y,w,T);
+    ctx.fillStyle='#8e2f21'; ctx.beginPath(); ctx.moveTo(x-6,y+8); ctx.lineTo(x+w/2,y-8); ctx.lineTo(x+w+6,y+8); ctx.lineTo(x+w+6,y+14); ctx.lineTo(x-6,y+14); ctx.fill();
+    ctx.fillStyle='#4a2a14'; ctx.fillRect(x+w/2-16,y+14,32,T-14);
+    ctx.strokeStyle='#e8d9b0'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x+w/2-16,y+14); ctx.lineTo(x+w/2+16,y+T); ctx.moveTo(x+w/2+16,y+14); ctx.lineTo(x+w/2-16,y+T); ctx.stroke();
+    // Zaun
+    ctx.strokeStyle='#8a6a3b'; ctx.lineWidth=3; ctx.strokeRect(x+1.5,y+T,w-3,h-T-1.5);
+    // Tiere
+    ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.font='26px serif';
+    for(const a of s.animals){
+      ctx.fillText(ANIMALS[a.t].emoji, x+20+a.px*(w-40), y+T+18+a.py*(h-T-36));
+    }
+    // Lager-Blase
+    if(s.stock>0){
+      ctx.fillStyle='#fff'; ctx.beginPath(); ctx.roundRect(x+w-52,y-24,50,24,10); ctx.fill();
+      ctx.fillStyle='#333'; ctx.font='bold 14px system-ui';
+      const prod = s.animals.length ? ANIMALS[s.animals[0].t].prod : '📦';
+      ctx.fillText(prod+' '+s.stock, x+w-27, y-11);
+    }
+    ctx.fillStyle='rgba(0,0,0,.45)'; ctx.font='12px system-ui'; ctx.textAlign='left';
+    ctx.fillText(s.animals.length+'/'+CAP, x+4, y+h-8);
+  }
+  // Vorschau
+  if(hover.x>=0 && hover.x<W && hover.y>=0 && hover.y<H){
+    if(S.mode==='stall'){
+      const px=hover.x-1, py=hover.y-1, ok=canPlaceStall(px,py)&&S.money>=STALL_COST;
+      ctx.fillStyle=ok?'rgba(255,255,255,.35)':'rgba(220,40,40,.4)';
+      ctx.fillRect(px*T,py*T,STALL_W*T,STALL_H*T);
+    } else if(S.mode==='field'){
+      ctx.fillStyle=occupied(hover.x,hover.y)?'rgba(220,40,40,.4)':'rgba(255,255,255,.4)';
+      ctx.fillRect(hover.x*T,hover.y*T,T,T);
+    } else {
+      ctx.strokeStyle='rgba(255,255,255,.7)'; ctx.lineWidth=2; ctx.strokeRect(hover.x*T+1,hover.y*T+1,T-2,T-2);
+    }
+  }
+  document.getElementById('money').textContent='💰 $'+S.money;
+}
+
+function loop(now){
+  const dt=Math.min((now-last)/1000,.5); last=now;
+  update(dt); draw(); requestAnimationFrame(loop);
+}
+buildPanel();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
